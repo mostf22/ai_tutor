@@ -1,1 +1,1 @@
-fastapiuvicornpdfplumbergoogle-generativeai
+fastapiuvicornpdfplumbergoogle-generativeaipython-multipart
