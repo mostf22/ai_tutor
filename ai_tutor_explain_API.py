@@ -6,6 +6,10 @@ import google.generativeai as genai
 
 app = FastAPI()
 
+@app.get("/")
+def read_root():
+    return {"message": "API is working!"}
+
 # إعداد Google Gemini API
 os.environ["GOOGLE_API_KEY"] = "AIzaSyDFlv5cQ6kSoAUSse9YIak0W10NFuoMZ_Q"  
 genai.configure(api_key=os.getenv("GOOGLE_API_KEY"))
