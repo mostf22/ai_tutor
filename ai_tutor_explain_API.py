@@ -10,7 +10,7 @@ import google.generativeai as genai
 # Configure Google Gemini API
 load_dotenv()
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
-genai.configure(api_key="GOOGLE_API_KEY")
+genai.configure(api_key=GOOGLE_API_KEY)
 model = genai.GenerativeModel('gemini-1.5-flash')
 
 # Function to clean text by removing HTML tags, extra spaces, and empty lines
