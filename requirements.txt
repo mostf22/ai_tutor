@@ -1,1 +1,1 @@
-fastapiuvicornpdfplumbergoogle-generativeaipython-multipart
+streamlitpdfplumberpython-dotenvpandasgoogle-generativeai
