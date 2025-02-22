@@ -1,1 +1,1 @@
-streamlitpdfplumberpython-dotenvpandasgoogle-generativeai
+streamlitpdfplumberpython-dotenvpandasgoogle-generativeaitabulate
