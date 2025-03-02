@@ -31,7 +31,7 @@ def extract_text_from_pdf(pdf_file):
     return text.strip()
 
 # Function to split text into paragraphs while preserving context
-def split_text(text, min_chunk_size=6000, max_chunk_size=12000):
+def split_text(text, min_chunk_size=5000, max_chunk_size=10000):
     """Split text into chunks based on paragraphs, merging small paragraphs."""
     paragraphs = text.split('\n\n')
     chunks = []
@@ -71,13 +71,12 @@ Your task is to convert raw educational content into a structured, engaging, and
 6️⃣ **Use diverse teaching methods** such as practical examples, interactive questions, or real-world scenarios to explain concepts.
 7️⃣ **Do not include any images or visual elements.** Focus solely on text-based content.
 8️⃣ **Provide detailed explanations** for each concept, ensuring that the content is thorough and comprehensive.
-9️⃣ **Ensure each slide contains at least 1000-1500 words** to make the content more detailed and informative.
+9️⃣ **Ensure each slide contains at least 100-800 words** to make the content more detailed and informative.
 
 🎯 **Example Output Format:**
 ### **Section 1: Introduction to Machine Learning**
 Machine learning is a subset of artificial intelligence that focuses on building systems that can learn from data and make predictions or decisions without being explicitly programmed. It is widely used in various applications such as image recognition, natural language processing, and recommendation systems.
 
-**Detailed Explanation:** Machine learning algorithms are designed to learn patterns from data. These algorithms can be categorized into different types based on how they learn. The most common types are supervised learning, unsupervised learning, and reinforcement learning. Each type has its own set of algorithms and use cases, making machine learning a versatile tool in various industries.
 
 **Example:** Imagine you want to build a system that can recognize handwritten digits. Using machine learning, you can train a model to recognize these digits by feeding it thousands of labeled images of handwritten numbers. The model learns the patterns in the images and can then predict the correct digit for new, unseen images.
 
@@ -89,7 +88,6 @@ There are three main types of machine learning:
 - **Unsupervised Learning:** The model is trained on unlabeled data, and it tries to find patterns or structures in the data. Examples include clustering and dimensionality reduction.
 - **Reinforcement Learning:** The model learns by interacting with an environment and receiving feedback in the form of rewards or penalties. Examples include game playing and robotics.
 
-**Detailed Explanation:** Supervised learning is often used when the goal is to predict an outcome based on input data. Unsupervised learning is useful for discovering hidden patterns or groupings in data. Reinforcement learning is ideal for scenarios where an agent needs to learn how to interact with an environment to achieve a goal.
 
 **Interactive Question:** Can you think of a real-world scenario where unsupervised learning might be useful?
 
@@ -101,7 +99,6 @@ Machine learning is used in various fields, including:
 - **Finance:** Fraud detection, algorithmic trading, and risk assessment.
 - **Technology:** Autonomous vehicles, natural language processing, and recommendation systems.
 
-**Detailed Explanation:** In healthcare, machine learning models are used to analyze medical images and detect diseases like cancer at an early stage, improving patient outcomes. In finance, machine learning algorithms are used to detect fraudulent transactions by identifying unusual patterns in transaction data. In technology, machine learning powers recommendation systems that suggest products or content based on user behavior.
 
 **Real-World Scenario:** In healthcare, machine learning models are used to analyze medical images and detect diseases like cancer at an early stage, improving patient outcomes.
 
@@ -269,27 +266,39 @@ if uploaded_file is not None:
                         else:
                             st.error(f"Invalid question format for question {i + 1}.")
 
+                    # تعديل الجزء الخاص بتقييم الإجابات في التطبيق
                     if st.button("Submit Answers"):
                         score = 0
                         wrong_answers = []  # لتخزين الأسئلة التي تمت الإجابة عليها بشكل خاطئ
 
-                        for i, (user_answer, correct_answer) in enumerate(zip(user_answers, st.session_state.correct_answers)):
-                            if user_answer.startswith(correct_answer):
-                                score += 1
-                            else:
-                                wrong_answers.append((i + 1, user_answer, correct_answer))  # حفظ السؤال الخطأ
+                        # التأكد من أن لدينا الأسئلة والإجابات
+                        if len(user_answers) == len(st.session_state.correct_answers):
+                            for i, (user_answer, correct_answer) in enumerate(zip(user_answers, st.session_state.correct_answers)):
+                            # استخراج الحرف (A, B, C, D) من إجابة المستخدم
+                                user_option = user_answer.split(".")[0].strip()
+            
+                            # تنظيف الإجابة الصحيحة (قد تكون "A" أو "A." أو مختلفة)
+                                correct_option = correct_answer.strip()
+            
+                            # مقارنة الأحرف بغض النظر عن التنسيق
+                                if user_option == correct_option:
+                                    score += 1
+                                else:
+                                    wrong_answers.append((i + 1, user_answer, correct_answer))
 
-                        st.write(f"### Your Score: {score} out of {len(questions)}")
-                        st.success("Thank you for completing the assessment!")
+                            st.write(f"### Your Score: {score} out of {len(user_answers)}")
+                            st.success("Thank you for completing the assessment!")
 
-                        # عرض الإجابات الصحيحة أسفل كل سؤال تمت الإجابة عليه بشكل خاطئ
-                        if wrong_answers:
-                            st.write("### Correct Answers for Wrongly Answered Questions:")
-                            for question_num, user_answer, correct_answer in wrong_answers:
-                                st.write(f"**Question {question_num}:**")
-                                st.write(f"Your answer: {user_answer}")
-                                st.write(f"**Correct answer:** {correct_answer}")
-                                st.write("---")  # إضافة فاصل بين الأسئلة
+                            # عرض الإجابات الصحيحة للأسئلة الخاطئة
+                            if wrong_answers:
+                                st.write("### Correct Answers for Wrongly Answered Questions:")
+                                for question_num, user_answer, correct_answer in wrong_answers:
+                                    st.write(f"**Question {question_num}:**")
+                                    st.write(f"Your answer: {user_answer}")
+                                    st.write(f"**Correct answer:** {correct_answer}")
+                                    st.write("---")
+                        else:
+                            st.error("عدد الإجابات لا يتطابق مع عدد الأسئلة. الرجاء حاول مرة أخرى.")
                 else:
                     st.warning("No questions generated. Please ensure the content is sufficient and try again.")
 
