@@ -9,6 +9,7 @@ from io import BytesIO
 from youtube_dl import YoutubeDL
 import tempfile
 import hashlib
+import random
 
 # Configure Google Gemini API
 load_dotenv()
@@ -57,6 +58,36 @@ def run_gemini_task(prompt, text):
     except Exception as e:
         st.error(f"Error processing text with Gemini: {e}")
         return ""
+
+def answer_student_question(slide_content, question):
+    """Generate an answer to a student's question about the slide."""
+    try:
+        qa_prompt = f"""
+        You are an expert educational tutor helping a student understand complex topics. 
+        Based on the slide content provided below, answer the student's question thoroughly but concisely.
+
+        Your response should:
+        1. Directly address the student's question with accurate information
+        2. Use clear, simple language appropriate for educational purposes
+        3. Include relevant examples when helpful for understanding
+        4. Connect the answer to broader concepts where appropriate
+        5. Highlight key terms or concepts using bold formatting
+        6. Prioritize information from the slide content, but supplement with general knowledge when necessary
+        7. End with a brief check for understanding if the concept is complex
+
+        SLIDE CONTENT:
+        {slide_content}
+
+        STUDENT'S QUESTION:
+        {question}
+
+        Remember to balance depth and clarity in your response. If the question requires knowledge beyond the slide content, indicate this clearly.
+        """
+        
+        response = model.generate_content(qa_prompt)
+        return response.text
+    except Exception as e:
+        return f"Sorry, I couldn't generate an answer due to an error: {e}"
 
 def is_valid_youtube_url(url):
     """Check if the YouTube URL is valid using youtube-dl."""
@@ -185,6 +216,32 @@ def chunk_text_for_tts(text, max_chars=1000):
     
     return chunks
 
+# Function to generate motivational messages based on score
+def get_motivational_message(percentage_score):
+    """Return a motivational message based on the student's score percentage."""
+    if percentage_score >= 70:
+        # Messages for scores above 70%
+        high_score_messages = [
+            "🌟 Excellent work! Your hard work and study efforts are truly paying off!",
+            "🎉 Amazing job! You've demonstrated a strong understanding of the material!",
+            "👏 Impressive result! Keep up this excellent performance!",
+            "✨ Outstanding! You've mastered most of the key concepts!",
+            "🏆 Great achievement! Your dedication to learning is evident in your score!",
+            "💯 Fantastic performance! You're well on your way to mastering this subject!"
+        ]
+        return random.choice(high_score_messages)
+    else:
+        # Messages for scores below 70%
+        low_score_messages = [
+            "💪 You're making progress! Another attempt will help solidify these concepts.",
+            "🔄 Learning is a journey! Try again with what you've learned so far.",
+            "🌱 Every attempt helps you grow! Review the material and give it another try.",
+            "📚 You've started building a foundation! Let's strengthen it with another attempt.",
+            "🧩 You're putting the pieces together! A review and second attempt will help complete the picture.",
+            "🚀 You're on the right path! Another attempt will help boost your understanding."
+        ]
+        return random.choice(low_score_messages)
+
 # Improved prompts with YouTube video handling
 explain_prompt = """
 ### **Transform Educational Content into Interactive Slides**
@@ -270,6 +327,8 @@ if "slides" not in st.session_state:
     st.session_state.video_topics = []
     st.session_state.cached_videos = {}
     st.session_state.tts_cache = {}
+    st.session_state.qa_history = {}  # New: Store Q&A history for each slide
+    st.session_state.assessment_attempted = False  # Track if assessment was attempted
 
 if uploaded_file:
     with st.spinner("Extracting text..."):
@@ -313,6 +372,8 @@ if uploaded_file:
                 st.session_state.video_topics = video_topics
                 st.session_state.cached_videos = {}  # Reset cached videos
                 st.session_state.tts_cache = {}  # Reset TTS cache
+                st.session_state.qa_history = {}  # Reset Q&A history
+                st.session_state.assessment_attempted = False  # Reset assessment attempts
                 st.success("Slides generated successfully!")
             else:
                 st.error("No content generated. Check your input file.")
@@ -335,19 +396,44 @@ if uploaded_file:
         if st.sidebar.button(f"{len(titles)+1}. Take Assessment"):
             if len(slides) > 0:
                 st.session_state.current_slide = len(slides)
+                st.session_state.assessment_attempted = False  # Reset when entering assessment
                 st.rerun()
             else:
                 st.warning("No slides available to take assessment.")
 
         # Content Display
-        with st.expander("📖 Slide Content", expanded=True):
-            if current_slide < len(slides):
+        if current_slide < len(slides):
+            # ---------- 1. SLIDE CONTENT (First) ----------
+            with st.expander("📖 Slide Content", expanded=True):
                 slide_content = slides[current_slide]
                 st.markdown(slide_content, unsafe_allow_html=True)
-                
-                # Get or fetch related videos
+            
+            # ---------- 2. AUDIO VERSION (Second) ----------
+            with st.expander("🔊 Audio Version", expanded=False):
+                if st.button("🔊 Play Audio", key=f"play_{current_slide}"):
+                    # Remove the title and just read the content by default
+                    content_text = re.sub(r'^### Slide \d+: .*?\n', '', slide_content)
+                    
+                    # Check if text is too long and needs to be chunked
+                    text_chunks = chunk_text_for_tts(content_text)
+                    
+                    # If multiple chunks, create a player for each chunk
+                    if len(text_chunks) > 1:
+                        st.write(f"Content divided into {len(text_chunks)} parts for better playback:")
+                        for i, chunk in enumerate(text_chunks):
+                            audio_data = text_to_speech(chunk, lang='en', slow=False)
+                            if audio_data:
+                                st.write(f"Part {i+1}:")
+                                st.audio(audio_data, format='audio/mp3')
+                    else:
+                        # Single chunk
+                        audio_data = text_to_speech(content_text, lang='en', slow=False)
+                        if audio_data:
+                            st.audio(audio_data, format='audio/mp3')
+            
+            # ---------- 3. RELATED VIDEOS (Third) ----------
+            with st.expander("🎬 Related Educational Videos", expanded=False):
                 current_topic = video_topics[current_slide]
-                st.write("### 🎬 Related Educational Videos")
                 
                 # Cache videos by topic to avoid repeated searches
                 if current_topic not in st.session_state.cached_videos:
@@ -376,100 +462,152 @@ if uploaded_file:
                     - [Khan Academy](https://www.youtube.com/c/khanacademy)
                     - [TED-Ed](https://www.youtube.com/teded)
                     """)
+            
+            # ---------- 4. Q&A SECTION (Fourth) ----------
+            with st.expander("❓ Questions & Answers", expanded=False):
+                # Initialize Q&A history for this slide if it doesn't exist
+                slide_id = f"slide_{current_slide}"
+                if slide_id not in st.session_state.qa_history:
+                    st.session_state.qa_history[slide_id] = []
                 
-                # SIMPLIFIED TEXT-TO-SPEECH SECTION
-                st.write("### 🔊 Text-to-Speech")
+                # Display previous Q&A for this slide
+                if st.session_state.qa_history[slide_id]:
+                    st.write("### Previous Questions")
+                    for q_a in st.session_state.qa_history[slide_id]:
+                        with st.chat_message("user"):
+                            st.markdown(q_a["question"])
+                        with st.chat_message("assistant"):
+                            st.markdown(q_a["answer"])
                 
-                if st.button("🔊 Play Audio", key=f"play_{current_slide}"):
-                    # Remove the title and just read the content by default
-                    content_text = re.sub(r'^### Slide \d+: .*?\n', '', slide_content)
+                # Input for new questions
+                st.write("### Ask a New Question")
+                with st.form(key=f"qa_form_{current_slide}"):
+                    user_question = st.text_area("Ask a question about this slide:", key=f"q_input_{current_slide}")
+                    submit_question = st.form_submit_button("Ask")
+                
+                if submit_question and user_question:
+                    # Generate answer using Gemini
+                    with st.spinner("Generating answer..."):
+                        answer = answer_student_question(slides[current_slide], user_question)
+                        
+                        # Save to history
+                        st.session_state.qa_history[slide_id].append({
+                            "question": user_question,
+                            "answer": answer
+                        })
                     
-                    # Check if text is too long and needs to be chunked
-                    text_chunks = chunk_text_for_tts(content_text)
-                    
-                    # If multiple chunks, create a player for each chunk
-                    if len(text_chunks) > 1:
-                        st.write(f"Content divided into {len(text_chunks)} parts for better playback:")
-                        for i, chunk in enumerate(text_chunks):
-                            audio_data = text_to_speech(chunk, lang='en', slow=False)
-                            if audio_data:
-                                st.write(f"Part {i+1}:")
-                                st.audio(audio_data, format='audio/mp3')
+                    # Display the new Q&A
+                    with st.chat_message("user"):
+                        st.markdown(user_question)
+                    with st.chat_message("assistant"):
+                        st.markdown(answer)
+            
+            # Navigation
+            col1, col2 = st.columns(2)
+            with col1:
+                if st.button("⬅️ Previous"):
+                    if current_slide > 0:
+                        st.session_state.current_slide -= 1
+                        st.rerun()
+            with col2:
+                if st.button("Next ➡️"):
+                    if current_slide < len(slides) - 1:
+                        st.session_state.current_slide += 1
+                        st.rerun()
                     else:
-                        # Single chunk
-                        audio_data = text_to_speech(content_text, lang='en', slow=False)
-                        if audio_data:
-                            st.audio(audio_data, format='audio/mp3')
-            else:
-                # Assessment Section
-                if not st.session_state.questions:
-                    with st.spinner("Generating questions..."):
-                        full_content = "\n".join(slides)
-                        response = run_gemini_task(assessment_prompt, full_content)
-                        if response:
-                            question_blocks = response.strip().split("\n\n")
-                            questions = []
-                            for block in question_blocks:
-                                lines = block.split("\n")
-                                if len(lines) >= 5:
-                                    question = lines[0]
-                                    options = lines[1:5]
-                                    correct_line = lines[5] if len(lines) > 5 else "Correct Answer: Unknown"
-                                    if ": " in correct_line:  # Check if the correct answer line is valid
-                                        correct_answer = correct_line.split(": ")[1].split(". ", 1)[0]
-                                        explanation = correct_line.split(". ", 1)[1] if ". " in correct_line else ""
-                                        questions.append({
-                                            "question": question,
-                                            "options": options,
-                                            "correct": correct_answer,
-                                            "explanation": explanation
-                                        })
-                            
-                            # Ensure we have exactly 10 questions
-                            if len(questions) < 10:
-                                st.error("""
-                                Failed to generate enough questions. 
-                                Common reasons:
-                                1. The slides content is too short
-                                2. The content is not technical enough
-                                3. Gemini API limitations
-                                """)
-                                # Reset questions for later generation
-                                st.session_state.questions = []
-                            else:
-                                st.session_state.questions = questions
+                        st.warning("You are on the last slide.")
+            st.write(f"**Slide {current_slide+1} of {len(slides)+1}**")
+        else:
+            # Assessment Section
+            if not st.session_state.questions:
+                with st.spinner("Generating questions..."):
+                    full_content = "\n".join(slides)
+                    response = run_gemini_task(assessment_prompt, full_content)
+                    if response:
+                        question_blocks = response.strip().split("\n\n")
+                        questions = []
+                        for block in question_blocks:
+                            lines = block.split("\n")
+                            if len(lines) >= 5:
+                                question = lines[0]
+                                options = lines[1:5]
+                                correct_line = lines[5] if len(lines) > 5 else "Correct Answer: Unknown"
+                                if ": " in correct_line:  # Check if the correct answer line is valid
+                                    correct_answer = correct_line.split(": ")[1].split(". ", 1)[0]
+                                    explanation = correct_line.split(". ", 1)[1] if ". " in correct_line else ""
+                                    questions.append({
+                                        "question": question,
+                                        "options": options,
+                                        "correct": correct_answer,
+                                        "explanation": explanation
+                                    })
+                        
+                        # Ensure we have exactly 10 questions
+                        if len(questions) < 10:
+                            st.error("""
+                            Failed to generate enough questions. 
+                            Common reasons:
+                            1. The slides content is too short
+                            2. The content is not technical enough
+                            3. Gemini API limitations
+                            """)
+                            # Reset questions for later generation
+                            st.session_state.questions = []
                         else:
-                            st.error("Failed to generate questions.")
+                            st.session_state.questions = questions
+                    else:
+                        st.error("Failed to generate questions.")
+            
+            if st.session_state.questions:
+                st.write("### Assessment Questions:")
                 
-                if st.session_state.questions:
-                    st.write("### Assessment Questions:")
-                    answers = []
-                    for i, q in enumerate(st.session_state.questions):
-                        # Clean the question from extra numbering
-                        question_text = q["question"].strip()
-                        if question_text.startswith(str(i+1) + "."):
-                            question_text = question_text[len(str(i+1)) + 1:].strip()
-                        
-                        # Clean the options from unwanted symbols
-                        options = [opt.strip().lstrip("- ").strip() for opt in q["options"]]
-                        
-                        # Display the question with options
-                        user_answer = st.radio(
-                            f"Q{i+1}: {question_text}",  # Fixed numbering
-                            options,
-                            key=f"q{i}",
-                            index=None  # No default option selected
-                        )
-                        answers.append(user_answer.split(".")[0].strip() if user_answer else None)
+                # Store answers in a specific key for assessment
+                if "assessment_answers" not in st.session_state:
+                    st.session_state.assessment_answers = [None] * len(st.session_state.questions)
+                
+                answers = st.session_state.assessment_answers
+                
+                for i, q in enumerate(st.session_state.questions):
+                    # Clean the question from extra numbering
+                    question_text = q["question"].strip()
+                    if question_text.startswith(str(i+1) + "."):
+                        question_text = question_text[len(str(i+1)) + 1:].strip()
                     
-                    if st.button("Submit"):
+                    # Clean the options from unwanted symbols
+                    options = [opt.strip().lstrip("- ").strip() for opt in q["options"]]
+                    
+                    # Display the question with options
+                    user_answer = st.radio(
+                        f"Q{i+1}: {question_text}",  # Fixed numbering
+                        options,
+                        key=f"q{i}",
+                        index=None if answers[i] is None else options.index(answers[i])
+                    )
+                    
+                    if user_answer:
+                        answers[i] = user_answer
+                
+                # Check if assessment has been attempted and score is below 70%
+                if st.session_state.assessment_attempted and st.session_state.last_score_percentage < 70:
+                    button_text = "Try Again"
+                else:
+                    button_text = "Submit"
+                
+                if st.button(button_text):
+                    # Validate that all questions have an answer
+                    if None in answers:
+                        st.warning("Please answer all questions before submitting.")
+                    else:
+                        # Process the selected answers (extract letter from options)
+                        processed_answers = [ans.split(".")[0].strip() if ans else None for ans in answers]
+                        
                         score = 0
                         results = []
-                        for i, (user, q) in enumerate(zip(answers, st.session_state.questions)):
+                        for i, (user, q) in enumerate(zip(processed_answers, st.session_state.questions)):
                             correct = q["correct"]
                             explanation = q["explanation"]
                             if user == correct:
-                                score +=1
+                                score += 1
                                 results.append({"correct": True, "explanation": ""})
                             else:
                                 results.append({
@@ -477,14 +615,18 @@ if uploaded_file:
                                     "explanation": explanation
                                 })
                         
-                        st.write(f"### Score: {score}/{len(answers)}")
+                        st.write(f"### Score: {score}/{len(processed_answers)}")
                         
-                        # Show "Try again" message if the score is less than 70%
-                        if (score / len(answers)) * 100 < 70:
-                            st.warning("Try again! You need to improve your performance.")
+                        # Calculate percentage score
+                        percentage_score = (score / len(processed_answers)) * 100
+                        st.session_state.last_score_percentage = percentage_score
+                        st.session_state.assessment_attempted = True
                         
-
-                        if score < len(answers):
+                        # Display appropriate motivational message based on score
+                        motivational_message = get_motivational_message(percentage_score)
+                        st.write(f"### {motivational_message}")
+                        
+                        if score < len(processed_answers):
                             st.write("### Incorrect Answers:")
                             for i, (result, q) in enumerate(zip(results, st.session_state.questions)):
                                 if not result["correct"]:
@@ -497,26 +639,17 @@ if uploaded_file:
                                     explanation = result["explanation"].replace("Explanation:", "").strip()
                                     
                                     st.write(f"**Q{i+1}:** {question_text}")
-                                    st.write(f"Your Answer: {answers[i]} | Correct: {q['correct']}")
+                                    st.write(f"Your Answer: {processed_answers[i]} | Correct: {q['correct']}")
                                     st.write(f"**Explanation:** {explanation}")
                                     st.write("---")
-                else:
-                    st.warning("Questions not generated yet.")
-        
-        # Navigation
-        col1, col2 = st.columns(2)
-        with col1:
-            if st.button("⬅️ Previous"):
-                if current_slide > 0:
-                    st.session_state.current_slide -=1
-                    st.rerun()
-        with col2:
-            if st.button("Next ➡️"):
-                if current_slide < len(slides) - 1:
-                    st.session_state.current_slide +=1
-                    st.rerun()
-                else:
-                    st.warning("You are on the last slide.")
-        st.write(f"**Slide {current_slide+1} of {len(slides)+1}**")
+                        
+                        # If score is 70% or higher, reset assessment for new attempts
+                        if percentage_score >= 70:
+                            if st.button("Start New Assessment"):
+                                st.session_state.assessment_answers = [None] * len(st.session_state.questions)
+                                st.session_state.assessment_attempted = False
+                                st.rerun()
+            else:
+                st.warning("Questions not generated yet.")
 else:
     st.warning("⚠️ Upload a PDF file to continue.")
