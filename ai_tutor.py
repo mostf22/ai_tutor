@@ -643,12 +643,6 @@ if uploaded_file:
                                     st.write(f"**Explanation:** {explanation}")
                                     st.write("---")
                         
-                        # If score is 70% or higher, reset assessment for new attempts
-                        if percentage_score >= 70:
-                            if st.button("Start New Assessment"):
-                                st.session_state.assessment_answers = [None] * len(st.session_state.questions)
-                                st.session_state.assessment_attempted = False
-                                st.rerun()
             else:
                 st.warning("Questions not generated yet.")
 else:
