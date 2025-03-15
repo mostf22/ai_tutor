@@ -205,7 +205,7 @@ def get_tts_cache_key(text, voice, rate):
     return hashlib.md5(key_content.encode()).hexdigest()
 
 # Improved TTS function with caching
-async def text_to_speech_async(text, voice="ar-SA-HamedNeural", rate="+0%"):
+async def text_to_speech_async(text, voice="en-US-ChristopherNeural", rate="+0%"):
     """Convert text to speech using Edge TTS with caching."""
     # Create a cache if it doesn't exist
     if "tts_cache" not in st.session_state:
@@ -484,10 +484,8 @@ if uploaded_file:
                 col1, col2 = st.columns(2)
                 with col1:
                     voice = st.selectbox(
-                        "اختر صوت القراءة:",
+                        "Choose the voice:",
                         [
-                            "ar-SA-HamedNeural",     # صوت عربي ذكوري
-                            "ar-SA-ZariyahNeural",   # صوت عربي أنثوي
                             "en-US-ChristopherNeural", # صوت إنجليزي ذكوري
                             "en-US-JennyNeural",     # صوت إنجليزي أنثوي
                         ],
@@ -495,7 +493,7 @@ if uploaded_file:
                     )
                 with col2:
                     rate = st.select_slider(
-                        "سرعة القراءة:",
+                        "Speed ​​of sound:",
                         options=["-50%", "-25%", "+0%", "+25%", "+50%"],
                         value="+0%",
                         key=f"rate_{current_slide}"
