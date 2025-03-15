@@ -4,7 +4,8 @@ import streamlit as st
 import pdfplumber
 from dotenv import load_dotenv
 import google.generativeai as genai
-from gtts import gTTS
+import edge_tts
+import asyncio
 from io import BytesIO
 from youtube_dl import YoutubeDL
 import tempfile
@@ -59,36 +60,62 @@ def run_gemini_task(prompt, text):
         st.error(f"Error processing text with Gemini: {e}")
         return ""
 
-def answer_student_question(slide_content, question):
+def answer_student_question(slide_content, question, allow_out_of_scope=False):
     """Generate an answer to a student's question about the slide."""
     try:
-        qa_prompt = f"""
-        You are an expert educational tutor helping a student understand complex topics. 
-        Based on the slide content provided below, answer the student's question thoroughly but concisely.
-
-        Your response should:
-        1. Directly address the student's question with accurate information
-        2. Use clear, simple language appropriate for educational purposes
-        3. Include relevant examples when helpful for understanding
-        4. Connect the answer to broader concepts where appropriate
-        5. Highlight key terms or concepts using bold formatting
-        6. Prioritize information from the slide content, but supplement with general knowledge when necessary
-        7. End with a brief check for understanding if the concept is complex
-
-        SLIDE CONTENT:
-        {slide_content}
-
-        STUDENT'S QUESTION:
-        {question}
-
-        Remember to balance depth and clarity in your response. If the question requires knowledge beyond the slide content, indicate this clearly.
-        """
+        # Choose the appropriate prompt based on whether out-of-scope answers are allowed
+        if allow_out_of_scope:
+            qa_prompt = f"""
+            You are an expert educational tutor helping a student understand complex topics. 
+            Answer the following question thoroughly but concisely, even if it's outside the scope of the current slide content.
+            
+            Your response should:
+            1. Directly address the student's question with accurate information
+            2. Use clear, simple language appropriate for educational purposes
+            3. Include relevant examples when helpful for understanding
+            4. Connect the answer to broader concepts where appropriate
+            5. Highlight key terms or concepts using bold formatting
+            6. If the question is related to the slide content, prioritize that information
+            7. If the question is outside the scope of the slide, provide a helpful answer based on general knowledge
+            8. End with a brief check for understanding if the concept is complex
+            
+            SLIDE CONTENT (for reference):
+            {slide_content}
+            
+            STUDENT'S QUESTION:
+            {question}
+            
+            Remember to provide a helpful response regardless of whether the question relates directly to the slide content.
+            """
+        else:
+            qa_prompt = f"""
+            You are an expert educational tutor helping a student understand complex topics. 
+            Based on the slide content provided below, answer the student's question thoroughly but concisely.
+            
+            Your response should:
+            1. Directly address the student's question with accurate information from the slide
+            2. Use clear, simple language appropriate for educational purposes
+            3. Include relevant examples when helpful for understanding
+            4. Connect the answer to broader concepts where appropriate
+            5. Highlight key terms or concepts using bold formatting
+            6. Prioritize information from the slide content, but supplement with general knowledge when necessary
+            7. End with a brief check for understanding if the concept is complex
+            8. If the question requires knowledge beyond the slide content, indicate this clearly
+            
+            SLIDE CONTENT:
+            {slide_content}
+            
+            STUDENT'S QUESTION:
+            {question}
+            
+            Remember to balance depth and clarity in your response. If the question requires knowledge beyond the slide content, indicate this clearly.
+            """
         
         response = model.generate_content(qa_prompt)
         return response.text
     except Exception as e:
         return f"Sorry, I couldn't generate an answer due to an error: {e}"
-
+    
 def is_valid_youtube_url(url):
     """Check if the YouTube URL is valid using youtube-dl."""
     ydl = YoutubeDL()
@@ -98,9 +125,22 @@ def is_valid_youtube_url(url):
     except:
         return False, None
 
-def get_related_videos(topic, max_results=3):
-    """Get related YouTube videos for a given topic."""
-    search_query = f"{topic} educational video"
+def get_related_videos(topic, slide_content=None, max_results=3):
+    """Get related YouTube videos for a given topic with improved relevance."""
+    # Extract key concepts from slide content if available
+    key_concepts = []
+    if slide_content:
+        # Extract bullet points which often contain key concepts
+        bullet_points = re.findall(r'- (.*?)(?:\n|$)', slide_content)
+        key_concepts = [point.strip() for point in bullet_points if len(point.strip()) > 3]
+    
+    # Combine slide title topic with key concepts for better search
+    search_terms = [topic]
+    if key_concepts:
+        search_terms.extend(key_concepts[:2])  # Add up to 2 key concepts to avoid too specific queries
+    
+    search_query = " ".join(search_terms) + " educational video"
+    
     ydl_opts = {
         'quiet': True,
         'extract_flat': True,
@@ -110,16 +150,26 @@ def get_related_videos(topic, max_results=3):
     
     with YoutubeDL(ydl_opts) as ydl:
         try:
-            search_results = ydl.extract_info(f"ytsearch{max_results}:{search_query}", download=False)
+            # Get more results than needed to allow for filtering
+            search_results = ydl.extract_info(f"ytsearch{max_results * 2}:{search_query}", download=False)
             if search_results and 'entries' in search_results:
                 videos = []
                 for entry in search_results.get('entries', []):
                     if entry:
-                        videos.append({
-                            'url': f"https://www.youtube.com/watch?v={entry.get('id')}",
-                            'title': entry.get('title', 'No title')
-                        })
-                return videos
+                        # Check if video title contains any of the key terms to ensure relevance
+                        title = entry.get('title', '').lower()
+                        is_relevant = any(term.lower() in title for term in search_terms if len(term) > 3)
+                        
+                        if is_relevant or not key_concepts:  # If no key concepts or video is relevant
+                            videos.append({
+                                'url': f"https://www.youtube.com/watch?v={entry.get('id')}",
+                                'title': entry.get('title', 'No title'),
+                                'relevance_score': sum(term.lower() in title for term in search_terms)
+                            })
+                
+                # Sort by relevance and limit to max_results
+                videos.sort(key=lambda x: x['relevance_score'], reverse=True)
+                return videos[:max_results]
         except Exception as e:
             st.error(f"Error finding related videos: {e}")
     
@@ -149,14 +199,14 @@ def prepare_text_for_tts(text):
     return text.strip()
 
 # Generate a cache key for TTS content
-def get_tts_cache_key(text, lang, speed):
+def get_tts_cache_key(text, voice, rate):
     """Generate a unique key for caching TTS audio."""
-    key_content = f"{text}_{lang}_{speed}"
+    key_content = f"{text}_{voice}_{rate}"
     return hashlib.md5(key_content.encode()).hexdigest()
 
 # Improved TTS function with caching
-def text_to_speech(text, lang='en', slow=False):
-    """Convert text to speech with caching to avoid regenerating the same audio."""
+async def text_to_speech_async(text, voice="ar-SA-HamedNeural", rate="+0%"):
+    """Convert text to speech using Edge TTS with caching."""
     # Create a cache if it doesn't exist
     if "tts_cache" not in st.session_state:
         st.session_state.tts_cache = {}
@@ -165,7 +215,7 @@ def text_to_speech(text, lang='en', slow=False):
     cleaned_text = prepare_text_for_tts(text)
     
     # Create a cache key
-    cache_key = get_tts_cache_key(cleaned_text, lang, slow)
+    cache_key = get_tts_cache_key(cleaned_text, voice, rate)
     
     # Check if we already have this audio in cache
     if cache_key in st.session_state.tts_cache:
@@ -173,19 +223,40 @@ def text_to_speech(text, lang='en', slow=False):
     
     # If not in cache, generate new audio
     try:
-        tts = gTTS(text=cleaned_text, lang=lang, slow=slow)
-        audio_bytes = BytesIO()
-        tts.write_to_fp(audio_bytes)
-        audio_bytes.seek(0)
+        communicate = edge_tts.Communicate(cleaned_text, voice, rate=rate)
+        
+        # Use a temporary file instead of BytesIO
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".mp3") as temp_file:
+            temp_path = temp_file.name
+        
+        # Save the audio to the temporary file
+        await communicate.save(temp_path)
+        
+        # Read the audio data from the file
+        with open(temp_path, 'rb') as f:
+            audio_data = f.read()
+        
+        # Clean up the temporary file
+        os.unlink(temp_path)
         
         # Store in cache
-        audio_data = audio_bytes.read()
         st.session_state.tts_cache[cache_key] = audio_data
         
         return audio_data
     except Exception as e:
         st.error(f"Error generating audio: {e}")
         return None
+
+# 3. أضف دالة غير متزامنة لاستدعاء الدالة المتزامنة
+def text_to_speech(text, voice="ar-SA-HamedNeural", rate="+0%"):
+    """Non-async wrapper for text_to_speech_async function."""
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        return loop.run_until_complete(text_to_speech_async(text, voice, rate))
+    finally:
+        loop.close()
+
 
 # Split long text for TTS to avoid timeouts
 def chunk_text_for_tts(text, max_chars=1000):
@@ -410,6 +481,26 @@ if uploaded_file:
             
             # ---------- 2. AUDIO VERSION (Second) ----------
             with st.expander("🔊 Audio Version", expanded=False):
+                col1, col2 = st.columns(2)
+                with col1:
+                    voice = st.selectbox(
+                        "اختر صوت القراءة:",
+                        [
+                            "ar-SA-HamedNeural",     # صوت عربي ذكوري
+                            "ar-SA-ZariyahNeural",   # صوت عربي أنثوي
+                            "en-US-ChristopherNeural", # صوت إنجليزي ذكوري
+                            "en-US-JennyNeural",     # صوت إنجليزي أنثوي
+                        ],
+                        key=f"voice_{current_slide}"
+                    )
+                with col2:
+                    rate = st.select_slider(
+                        "سرعة القراءة:",
+                        options=["-50%", "-25%", "+0%", "+25%", "+50%"],
+                        value="+0%",
+                        key=f"rate_{current_slide}"
+                    )
+                    
                 if st.button("🔊 Play Audio", key=f"play_{current_slide}"):
                     # Remove the title and just read the content by default
                     content_text = re.sub(r'^### Slide \d+: .*?\n', '', slide_content)
@@ -421,13 +512,13 @@ if uploaded_file:
                     if len(text_chunks) > 1:
                         st.write(f"Content divided into {len(text_chunks)} parts for better playback:")
                         for i, chunk in enumerate(text_chunks):
-                            audio_data = text_to_speech(chunk, lang='en', slow=False)
+                            audio_data = text_to_speech(chunk, voice=voice, rate=rate)
                             if audio_data:
                                 st.write(f"Part {i+1}:")
                                 st.audio(audio_data, format='audio/mp3')
                     else:
                         # Single chunk
-                        audio_data = text_to_speech(content_text, lang='en', slow=False)
+                        audio_data = text_to_speech(content_text, voice=voice, rate=rate)
                         if audio_data:
                             st.audio(audio_data, format='audio/mp3')
             
@@ -483,12 +574,35 @@ if uploaded_file:
                 st.write("### Ask a New Question")
                 with st.form(key=f"qa_form_{current_slide}"):
                     user_question = st.text_area("Ask a question about this slide:", key=f"q_input_{current_slide}")
+                    
+                    # Add checkbox for out-of-scope questions
+                    out_of_scope = st.checkbox("Answer even if question is outside slide scope", key=f"out_of_scope_{current_slide}")
+                    
                     submit_question = st.form_submit_button("Ask")
                 
                 if submit_question and user_question:
                     # Generate answer using Gemini
                     with st.spinner("Generating answer..."):
-                        answer = answer_student_question(slides[current_slide], user_question)
+                        if out_of_scope:
+                            # Modify the prompt for out-of-scope questions
+                            general_prompt = f"""
+                            You are an expert educational tutor helping a student understand complex topics. 
+                            Answer the following question with your best knowledge, even if it's outside the scope of the current slide.
+                            
+                            If the question relates to the slide content, prioritize that information, but feel free to provide general knowledge as needed.
+                            
+                            SLIDE CONTENT (for reference):
+                            {slides[current_slide]}
+                            
+                            STUDENT'S QUESTION:
+                            {user_question}
+                            
+                            Please provide a helpful, educational response regardless of whether the question is directly related to the slide content.
+                            """
+                            answer = run_gemini_task(general_prompt, "")
+                        else:
+                            # Standard in-scope answer
+                            answer = answer_student_question(slides[current_slide], user_question)
                         
                         # Save to history
                         st.session_state.qa_history[slide_id].append({
