@@ -1,1 +1,1 @@
-streamlitpdfplumberpython-dotenvgoogle-generativeaiedge-ttsyoutube-dlpysocksasyncioaiohttp
+streamlitpdfplumberpython-dotenvgoogle-generativeaiedge-ttsyoutube-dl
