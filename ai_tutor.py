@@ -63,15 +63,6 @@ LEVEL_INSTRUCTIONS = {
     - Use technical terms with brief explanations
     - Include 1-2 examples per complex concept
     - Highlight connections between concepts
-    """,
-    
-    "Advanced": """
-    ADVANCED LEVEL REQUIREMENTS:
-    - Professional, concise academic tone
-    - Assume strong domain knowledge
-    - Use technical jargon appropriately
-    - Focus on complex relationships between concepts
-    - Include case studies/research references
     """
 }
 
@@ -182,7 +173,67 @@ def run_gemini_task(prompt, text):
         return response.text
     except Exception as e:
         st.error(f"Error processing text with Gemini: {e}")
-        return ""
+   
+# 1. Add this new function to regenerate slides with simpler explanations
+def regenerate_slides_with_easier_explanations(lesson_text):
+    """Regenerate slides with simpler explanations."""
+    # Always use the Basic level for regeneration
+    level = "Basic"
+    level_instructions = LEVEL_INSTRUCTIONS["Basic"]
+    
+    # Add emphasis on simplification in the prompt
+    dynamic_prompt = explain_prompt.format(
+        level=level,
+        level_instructions=level_instructions
+    ) + "\n\nIMPORTANT: Make explanations MUCH SIMPLER than before. Use extremely basic vocabulary, short sentences, and many examples. Avoid technical terms where possible, and when necessary, define them immediately."
+    
+    with st.spinner("Regenerating slides with simpler explanations..."):
+        if len(lesson_text) > 1000:
+            chunks = split_text(lesson_text)
+            presentation = ""
+            for chunk in chunks:
+                response = run_gemini_task(dynamic_prompt, chunk)
+                presentation += f"{response}\n---\n" if response else ""
+        else:
+            presentation = run_gemini_task(dynamic_prompt, lesson_text)
+    
+    if presentation:
+        slides = [s.strip() for s in presentation.split("---") if s.strip()]
+        titles = []
+        video_topics = []
+        cleaned_slides = []
+        
+        for slide in slides:
+            title_match = re.search(r'### Slide \d+: (.+)', slide)
+            title = title_match.group(1).strip() if title_match else "Untitled Slide"
+            titles.append(title)
+            
+            topic_match = re.search(r'VIDEO_TOPIC: (.+?)$', slide, re.MULTILINE)
+            topic = topic_match.group(1).strip() if topic_match else title
+            video_topics.append(topic)
+            
+            cleaned_slide = re.sub(r'VIDEO_TOPIC: (.+?)$', '', slide, flags=re.MULTILINE)
+            cleaned_slides.append(cleaned_slide.strip())
+        
+        # Store a flag to indicate we're using simplified content
+        st.session_state.using_simplified_content = True
+        
+        st.session_state.update({
+            "slides": cleaned_slides,
+            "titles": titles,
+            "video_topics": video_topics,
+            "current_slide": 0,
+            "cached_videos": {},
+            "tts_cache": {},
+            "qa_history": {},
+            "quiz_attempted": False
+        })
+        st.success("Slides regenerated with simpler explanations!")
+        return True
+    else:
+        st.error("Failed to regenerate slides. Please try again.")
+        return False
+
 
 def answer_student_question(slide_content, question, allow_out_of_scope=False):
     """Generate an answer to a student's question about the slide."""
@@ -385,29 +436,6 @@ def get_related_videos(topic, slide_content=None, max_results=3):
 
 
 # Quiz Module
-def get_motivational_message(percentage_score):
-    """Return a motivational message based on the student's score percentage."""
-    if percentage_score >= 70:
-        high_score_messages = [
-            "🌟 Excellent work! Your hard work and study efforts are truly paying off!",
-            "🎉 Amazing job! You've demonstrated a strong understanding of the material!",
-            "👏 Impressive result! Keep up this excellent performance!",
-            "✨ Outstanding! You've mastered most of the key concepts!",
-            "🏆 Great achievement! Your dedication to learning is evident in your score!",
-            "💯 Fantastic performance! You're well on your way to mastering this subject!"
-        ]
-        return random.choice(high_score_messages)
-    else:
-        low_score_messages = [
-            "💪 You're making progress! Another attempt will help solidify these concepts.",
-            "🔄 Learning is a journey! Try again with what you've learned so far.",
-            "🌱 Every attempt helps you grow! Review the material and give it another try.",
-            "📚 You've started building a foundation! Let's strengthen it with another attempt.",
-            "🧩 You're putting the pieces together! A review and second attempt will help complete the picture.",
-            "🚀 You're on the right path! Another attempt will help boost your understanding."
-        ]
-        return random.choice(low_score_messages)
-
 def parse_quiz_response(response):
     """Parse Gemini's quiz response into structured questions."""
     question_blocks = response.strip().split("\n\n")
@@ -418,10 +446,11 @@ def parse_quiz_response(response):
         if len(lines) >= 4:  # Minimum lines for a valid question
             try:
                 question = lines[0]
-                options = lines[1:-1]
+                options = [opt for opt in lines[1:-1] if opt]
                 answer_line = lines[-1]
                 
-                if answer_line.startswith("Correct Answer:"):
+                # Only add questions with valid number of options (2 for T/F, 4 for MCQ)
+                if len(options) in [2, 4] and answer_line.startswith("Correct Answer:"):
                     answer_parts = answer_line.split(". ", 1)
                     correct_answer = answer_parts[0].split(": ")[1]
                     explanation = answer_parts[1] if len(answer_parts) > 1 else ""
@@ -446,14 +475,6 @@ def main():
     # File uploader
     uploaded_file = st.file_uploader("📂 Upload PDF", type="pdf")
 
-    # Expertise level selector
-    expertise_level = st.selectbox(
-        "🎚️ Select Expertise Level",
-        ["Basic", "Intermediate", "Advanced"],
-        index=1,
-        key="expertise_level"
-    )
-
     # Initialize session state
     session_defaults = {
         "slides": [],
@@ -466,7 +487,9 @@ def main():
         "tts_cache": {},
         "qa_history": {},
         "quiz_attempted": False,
-        "quiz_answers": []
+        "quiz_answers": [],
+        "original_lesson_text": "",  # Add this to store the original text
+        "using_simplified_content": False  # Add this to track simplified content
     }
     for key, value in session_defaults.items():
         if key not in st.session_state:
@@ -476,10 +499,16 @@ def main():
         with st.spinner("Extracting text..."):
             lesson_text = extract_text_from_pdf(uploaded_file)
             lesson_text = clean_text(lesson_text)
+            # Store the original lesson text
+            st.session_state.original_lesson_text = lesson_text
         
         if st.button("Generate"):
             try:
-                level = st.session_state.expertise_level
+                # Reset simplified content flag when generating normally
+                st.session_state.using_simplified_content = False
+                
+                # Use Intermediate level by default for initial generation
+                level = "Intermediate"
                 level_instructions = LEVEL_INSTRUCTIONS[level]
                 dynamic_prompt = explain_prompt.format(
                     level=level,
@@ -558,8 +587,13 @@ def main():
     else:
         st.warning("⚠️ Upload a PDF file to continue.")
 
+# the display_slide_content function to show appropriate notice
 def display_slide_content(current_slide, slides, video_topics):
     """Display slide content with associated features."""
+    # Add a notice if we're using simplified content
+    if st.session_state.get("using_simplified_content", False):
+        st.info("📘 You are viewing simplified explanations for easier understanding.")
+    
     with st.expander("📖 Slide Content", expanded=True):
         slide_content = slides[current_slide]
         st.markdown(slide_content, unsafe_allow_html=True)
@@ -694,36 +728,24 @@ def display_quiz_section():
     if not st.session_state.questions:
         with st.spinner("Generating questions..."):
             full_content = "\n".join(st.session_state.slides)
-            response = run_gemini_task(quiz_prompt, full_content)
+            
+            # Update the quiz prompt to be more explicit about format requirements
+            updated_quiz_prompt = quiz_prompt + "\nIMPORTANT: Ensure each question has EXACTLY 2 options (for True/False) or EXACTLY 4 options (for MCQs)."
+            
+            response = run_gemini_task(updated_quiz_prompt, full_content)
             if response:
-                question_blocks = response.strip().split("\n\n")
-                questions = []
+                st.session_state.questions = parse_quiz_response(response)
                 
-                for block in question_blocks:
-                    lines = [line.strip() for line in block.split("\n") if line.strip()]
-                    if len(lines) >= 4:  # Minimum lines for a valid question
-                        try:
-                            question = lines[0]
-                            options = lines[1:-1]
-                            answer_line = lines[-1]
-                            
-                            if answer_line.startswith("Correct Answer:"):
-                                answer_parts = answer_line.split(". ", 1)
-                                correct_answer = answer_parts[0].split(": ")[1]
-                                explanation = answer_parts[1] if len(answer_parts) > 1 else ""
-                                
-                                questions.append({
-                                    "question": question,
-                                    "options": options,
-                                    "correct": correct_answer,
-                                    "explanation": explanation
-                                })
-                        except Exception as e:
-                            st.error(f"Error parsing question: {str(e)}")
+                # If we don't have enough questions, try to generate more
+                if len(st.session_state.questions) < 3 and len(st.session_state.slides) > 1:
+                    retry_prompt = quiz_prompt + "\nIMPORTANT: Generate at least 5 questions with EXACTLY 2 options (for True/False) or EXACTLY 4 options (for MCQs)."
+                    retry_response = run_gemini_task(retry_prompt, full_content)
+                    if retry_response:
+                        additional_questions = parse_quiz_response(retry_response)
+                        st.session_state.questions.extend(additional_questions)
                 
                 # Initialize quiz answers with proper length
-                st.session_state.questions = questions
-                st.session_state.quiz_answers = [None] * len(questions)  # Add this line
+                st.session_state.quiz_answers = [None] * len(st.session_state.questions)
             else:
                 st.error("Failed to generate questions. Content might be too short.")
 
@@ -733,24 +755,23 @@ def display_quiz_section():
         
         # Initialize quiz_answers if not properly set
         if len(st.session_state.quiz_answers) != total_questions:
-            st.session_state.quiz_answers = [None] * total_questions  # Add this line
-
-        # Display questions
+            st.session_state.quiz_answers = [None] * total_questions
+        
+        # Display questions (no filtering needed since we validate during parsing)
         for i, q in enumerate(st.session_state.questions):
             question_text = q["question"].split(". ", 1)[-1]
-            options = [opt for opt in q["options"] if opt]
+            options = q["options"]
             
-            if len(options) not in [2, 4]:
-                continue
+            # Reset key on retry to clear previous selections
+            radio_key = f"q{i}_{st.session_state.get('quiz_retry_count', 0)}"
             
             user_answer = st.radio(
                 f"Q{i+1}: {question_text}",
                 options,
-                key=f"q{i}",
+                key=radio_key,
                 index=None
             )
             if user_answer:
-                # Ensure safe assignment
                 if i < len(st.session_state.quiz_answers):
                     st.session_state.quiz_answers[i] = user_answer
                 else:
@@ -758,26 +779,79 @@ def display_quiz_section():
 
         
         # Handle quiz submission
-        button_text = "Try Again" if st.session_state.quiz_attempted else "Submit"
-        if st.button(button_text):
-            if None in st.session_state.quiz_answers:
-                st.warning("Please answer all questions.")
-            else:
-                processed_answers = [ans.split(".")[0].strip() if ans else None for ans in st.session_state.quiz_answers]
-                score = sum(1 for user, q in zip(processed_answers, st.session_state.questions) if user == q["correct"])
-                percentage_score = (score / total_questions) * 100
-                
-                st.session_state.quiz_attempted = True
-                st.session_state.last_score_percentage = percentage_score
-                
-                st.write(f"### Score: {score}/{total_questions}")
-                st.write(f"### {get_motivational_message(percentage_score)}")
-                
-                if score < total_questions:
-                    st.write("### Incorrect Answers:")
-                    for i, (user, q) in enumerate(zip(processed_answers, st.session_state.questions)):
-                        if user != q["correct"]:
-                            display_question_feedback(i, q, user)
+        if not st.session_state.quiz_attempted:
+            if st.button("Submit"):
+                if None in st.session_state.quiz_answers:
+                    st.warning("Please answer all questions.")
+                else:
+                    processed_answers = [ans.split(".")[0].strip() if ans else None for ans in st.session_state.quiz_answers]
+                    score = sum(1 for user, q in zip(processed_answers, st.session_state.questions) if user == q["correct"])
+                    percentage_score = (score / total_questions) * 100
+                    
+                    st.session_state.quiz_attempted = True
+                    st.session_state.last_score_percentage = percentage_score
+                    
+                    st.write(f"### Score: {score}/{total_questions}")
+                    
+                    if score < total_questions:
+                        st.write("### Incorrect Answers:")
+                        for i, (user, q) in enumerate(zip(processed_answers, st.session_state.questions)):
+                            if user != q["correct"]:
+                                display_question_feedback(i, q, user)
+                    
+                    # Show options if score is less than 75%
+                    if percentage_score < 75:
+                        col1, col2 = st.columns(2)
+                        with col1:
+                            if st.button("Retry Quiz"):
+                                # Reset quiz state and increment retry counter to force new radio button keys
+                                st.session_state.quiz_attempted = False
+                                st.session_state.quiz_answers = [None] * total_questions
+                                if 'quiz_retry_count' not in st.session_state:
+                                    st.session_state.quiz_retry_count = 1
+                                else:
+                                    st.session_state.quiz_retry_count += 1
+                                st.rerun()
+                        with col2:
+                            # Replace "Study Slides" with "Study Again with Easier Explanations"
+                            if st.button("Study Again with Easier Explanations"):
+                                if st.session_state.original_lesson_text:
+                                    success = regenerate_slides_with_easier_explanations(st.session_state.original_lesson_text)
+                                    if success:
+                                        st.rerun()
+                                else:
+                                    st.error("Original lesson text not found. Please upload the PDF again.")
+        else:
+            # If quiz was already attempted, show results
+            score = sum(1 for user, q in zip(st.session_state.quiz_answers, st.session_state.questions) 
+                        if user.split(".")[0].strip() == q["correct"])
+            percentage_score = (score / total_questions) * 100
+            
+            st.write(f"### Score: {score}/{total_questions}")
+            
+            if score < total_questions:
+                st.write("### Incorrect Answers:")
+                for i, (user, q) in enumerate(zip(st.session_state.quiz_answers, st.session_state.questions)):
+                    if user.split(".")[0].strip() != q["correct"]:
+                        display_question_feedback(i, q, user)
+            
+            # Show options if score is less than 75%
+            if percentage_score < 75:
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("Retry Quiz"):
+                            # Reset quiz state code...
+                            st.rerun()
+                    with col2:
+                        # Replace "Study Slides" with "Study Again with Easier Explanations"
+                        if st.button("Study Again with Easier Explanations"):
+                            if st.session_state.original_lesson_text:
+                                success = regenerate_slides_with_easier_explanations(st.session_state.original_lesson_text)
+                                if success:
+                                    st.rerun()
+                            else:
+                                st.error("Original lesson text not found. Please upload the PDF again.")
+
 
 def display_question_feedback(index, question, user_answer):
     """Display detailed feedback for incorrect answers."""
