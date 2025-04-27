@@ -605,7 +605,7 @@ def display_slide_content(current_slide, slides, video_topics):
 
 def display_audio_version(current_slide, slide_content):
     """Display TTS controls and audio player."""
-    with st.expander("🔊 Audio Version", expanded=False):
+    with st.expander("🔊 Audio", expanded=False):
         col1, col2 = st.columns(2)
         with col1:
             voice = st.selectbox(
@@ -664,7 +664,7 @@ def display_related_videos(current_slide, video_topics):
 
 def display_qa_section(current_slide, slide_content):
     """Display Q&A interface."""
-    with st.expander("❓ Questions & Answers", expanded=False):
+    with st.expander("❓ Ask a question, and The AI Tutor will provide the answer", expanded=False):
         slide_id = f"slide_{current_slide}"
         if slide_id not in st.session_state.qa_history:
             st.session_state.qa_history[slide_id] = []
