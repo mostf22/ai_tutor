@@ -664,7 +664,7 @@ def display_related_videos(current_slide, video_topics):
 
 def display_qa_section(current_slide, slide_content):
     """Display Q&A interface."""
-    with st.expander("❓ Ask a question, and The AI Tutor will provide the answer", expanded=False):
+    with st.expander("❓ Learners ask, AI Tutor provides answers", expanded=False):
         slide_id = f"slide_{current_slide}"
         if slide_id not in st.session_state.qa_history:
             st.session_state.qa_history[slide_id] = []
